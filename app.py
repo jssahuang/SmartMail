@@ -231,6 +231,44 @@ def mark_as_read():
 
     return jsonify({"message": f"Marked {marked_count} emails from {sender} as read."})
 
+@app.route("/trash_email_by_id", methods=["GET"])
+def trash_email_by_id():
+    """
+    Moves a single email (specified by its Gmail message ID) to the Trash.
+    Example usage: /trash_email_by_id?email_id=abc123xyz
+    """
+    # 1. Get the email_id from query parameters
+    email_id = request.args.get("email_id")
+    print(f"Email ID to trash: {email_id}")
+    if not email_id:
+        return jsonify({"error": "Please provide an email_id using '?email_id=...'" }), 400
+
+    # 2. Get credentials
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+
+    # 3. Build the Gmail service
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+
+    # 4. Check if the email exists
+    try:
+        email = service.users().messages().get(userId="me", id=email_id).execute()
+        print(f"Email found: {email}")
+    except googleapiclient.errors.HttpError as e:
+        print(f"Error retrieving email: {e}")
+        return jsonify({"error": "Failed to retrieve the email.", "details": str(e)}), 400
+
+    # 5. Trash the specific email
+    try:
+        response = service.users().messages().trash(userId="me", id=email_id).execute()
+        print(f"Trash response: {response}")
+        return jsonify({"message": f"Email with ID {email_id} has been moved to trash."})
+    except googleapiclient.errors.HttpError as e:
+        # If the message doesn't exist or there's another Gmail API error
+        print(f"Error trashing email: {e}")
+        return jsonify({"error": "Failed to trash the email.", "details": str(e)}), 400
+
 @app.route("/prioritize_emails", methods=["GET"])
 def prioritize_emails():
     """
@@ -341,6 +379,34 @@ def prioritize_emails():
     
     return jsonify(prioritized_emails)
 
+
+    """
+    Moves a single email (specified by its Gmail message ID) to the Trash.
+    Example usage: /trash_email_by_id?email_id=abc123xyz
+    """
+    # 1. Get the email_id from query parameters
+    email_id = request.args.get("email_id")
+    print(f"Email ID to trash: {email_id}")
+    if not email_id:
+        return jsonify({"error": "Please provide an email_id using '?email_id=...'" }), 400
+
+    # 2. Get credentials
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+
+    # 3. Build the Gmail service
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+
+    # 4. Trash the specific email
+    try:
+        response = service.users().messages().trash(userId="me", id=email_id).execute()
+        print(f"Trash response: {response}")
+        return jsonify({"message": f"Email with ID {email_id} has been moved to trash."})
+    except googleapiclient.errors.HttpError as e:
+        # If the message doesn't exist or there's another Gmail API error
+        print(f"Error trashing email: {e}")
+        return jsonify({"error": "Failed to trash the email.", "details": str(e)}), 400
 @app.route("/authorize")
 def authorize():
     flow = Flow.from_client_secrets_file(
