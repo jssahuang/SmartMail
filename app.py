@@ -269,6 +269,36 @@ def trash_email_by_id():
         print(f"Error trashing email: {e}")
         return jsonify({"error": "Failed to trash the email.", "details": str(e)}), 400
 
+
+@app.route("/mark_email_as_read_by_id", methods=["GET"])
+def mark_email_as_read_by_id():
+    """
+    Marks a single email (specified by its Gmail message ID) as read.
+    Example usage: /mark_email_as_read_by_id?email_id=abc123xyz
+    """
+    # 1. Get the email_id from query parameters
+    email_id = request.args.get("email_id")
+    if not email_id:
+        return jsonify({"error": "Please provide an email_id using '?email_id=...'" }), 400
+
+    # 2. Get credentials
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+
+    # 3. Build the Gmail service
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+
+    # 4. Mark the email as read by removing the UNREAD label
+    try:
+        modify_body = {
+            "removeLabelIds": ["UNREAD"]
+        }
+        service.users().messages().modify(userId="me", id=email_id, body=modify_body).execute()
+        return jsonify({"message": f"Email with ID {email_id} has been marked as read."})
+    except googleapiclient.errors.HttpError as e:
+        return jsonify({"error": "Failed to mark the email as read.", "details": str(e)}), 400
+
 @app.route("/prioritize_emails", methods=["GET"])
 def prioritize_emails():
     """
