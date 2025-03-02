@@ -297,7 +297,8 @@ def prioritize_emails():
         emailList.append({"email_id": msg_id, "subject": subject})
    
     # Call the Gemini API to get the priority for each email.
-    client = genai.Client(api_key="AIzaSyDTLZ7UPwUchzUTZSK2jPUpOAba14hS1dg")
+    api_key = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents="Given a list of " + str(len(emailList)) + " emails, prioritize them based on their subject line, where 10 is a really important email that should be responded to immediately and 1 is most likely to be spam cluttering your inbox. Return the top 10 emails with their subject, email ID, and priority in JSON format with keys email_id unmodified, subject, and priority: " + str(emailList) + "Do not include anything else in the response besides the JSON object.",
@@ -314,8 +315,6 @@ def prioritize_emails():
     try:
         # Use a regular expression to extract the JSON substring
         json_match = re.search(r'(\[.*\])', response_content, re.DOTALL)
-
-        # json_match = re.search(r'\[.*?\]', response_content)
         if json_match:
             json_str = json_match.group(0)
             prioritized_emails = json.loads(json_str)  # Parse the JSON response
