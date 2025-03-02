@@ -84,6 +84,99 @@ def trash_emails():
 
     return jsonify({"message": f"Trashed {trashed_count} emails from {sender}."})
 
+@app.route("/top_senders", methods=["GET"])
+def top_senders():
+    """
+    Returns the 10 most frequent email senders (name, email, and count)
+    for unread emails sent on or after a given date.
+    
+    Example usage: /top_senders?date=2023-03-01
+    Date format should be YYYY-MM-DD.
+    """
+    date_str = request.args.get("date")
+    if not date_str:
+        return jsonify({"error": "Please provide a date using '?date=YYYY-MM-DD'"}), 400
+
+    # Validate and convert date format for Gmail query
+    # Gmail expects the date in YYYY/MM/DD format for the "after:" operator.
+    try:
+        year, month, day = date_str.split("-")
+    except ValueError:
+        return jsonify({"error": "Date format should be YYYY-MM-DD"}), 400
+
+    gmail_date = f"{year}/{month}/{day}"
+    query = f"is:unread after:{gmail_date}"
+
+    if "credentials" not in session:
+        return redirect(url_for("authorize"))
+
+    credentials = google.oauth2.credentials.Credentials(**session["credentials"])
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=credentials)
+
+    sender_counts = {}
+    sender_names = {}  # Map email -> name
+    page_token = None
+
+    # Loop through paginated results
+    while True:
+        response = service.users().messages().list(
+            userId="me",
+            q=query,
+            maxResults=100,
+            pageToken=page_token
+        ).execute()
+
+        messages = response.get("messages", [])
+        for message in messages:
+            msg_id = message["id"]
+            # Retrieve only metadata for efficiency; only need the "From" header.
+            msg = service.users().messages().get(
+                userId="me", id=msg_id,
+                format="metadata",
+                metadataHeaders=["From"]
+            ).execute()
+            headers = msg.get("payload", {}).get("headers", [])
+            from_value = None
+            for header in headers:
+                if header["name"].lower() == "from":
+                    from_value = header["value"]
+                    break
+
+            if from_value:
+                # Parse the "From" header (e.g., "John Doe <john@example.com>")
+                name, email_address = parseaddr(from_value)
+                # Count this sender's occurrence.
+                sender_counts[email_address] = sender_counts.get(email_address, 0) + 1
+                # Save the sender's name (if available)
+                if email_address not in sender_names:
+                    sender_names[email_address] = name if name else email_address
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    # Sort senders by frequency (descending) and take the top 10.
+    top_senders_list = sorted(sender_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    result = []
+    for email_address, count in top_senders_list:
+        result.append({
+            "email": email_address,
+            "name": sender_names.get(email_address, email_address),
+            "unread_count": count
+        })
+
+    # Update session credentials (in case token was refreshed)
+    session["credentials"] = {
+        "token": credentials.token,
+        "refresh_token": credentials.refresh_token,
+        "token_uri": credentials.token_uri,
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+        "scopes": credentials.scopes
+    }
+
+    return jsonify(result)
+
 @app.route("/move_emails", methods=["GET"])
 def move_emails():
     """
@@ -195,7 +288,7 @@ def oauth2callback():
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     
-    # Store credentials in the session
+    # Store credentials in session (if needed by the backend)
     session["credentials"] = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
@@ -205,7 +298,9 @@ def oauth2callback():
         "scopes": credentials.scopes
     }
     
-    return redirect(url_for("index"))
+    # Redirect to the frontend with the token
+    frontend_url = "http://localhost:8501"
+    return redirect(f"{frontend_url}?access_token={credentials.token}")
 
 @app.route("/clear")
 def clear_credentials():
