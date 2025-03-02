@@ -131,6 +131,104 @@ def top_senders():
 
     return jsonify(result)
 
+@app.route("/trash_emails", methods=["GET"])
+def trash_emails():
+    """
+    Trashes all emails from a specified sender.
+    Example usage: /trash_emails?sender=user@example.com
+    """
+    # Get the sender email from the query parameters
+    sender = request.args.get("sender")
+    if not sender:
+        return jsonify({"error": "Please provide a sender email using '?sender=...'"}), 400
+
+    # Use the helper to get credentials (checks header first, then session)
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+    
+    # Build the Gmail service with the obtained credentials.
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+    
+    # Build the search query for emails from the specified sender.
+    query = f"from:{sender}"
+    results = service.users().messages().list(userId="me", q=query).execute()
+    messages = results.get("messages", [])
+    
+    if not messages:
+        return jsonify({"message": f"No emails found from {sender}."})
+    
+    trashed_count = 0
+    # Loop through the messages and trash each one.
+    for message in messages:
+        msg_id = message["id"]
+        service.users().messages().trash(userId="me", id=msg_id).execute()
+        trashed_count += 1
+
+    # (Optionally) Update session credentials if they exist.
+    if "credentials" in session:
+        session["credentials"] = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes
+        }
+    
+    return jsonify({"message": f"Trashed {trashed_count} emails from {sender}."})
+
+@app.route("/mark_as_read", methods=["GET"])
+def mark_as_read():
+    """
+    Marks all emails from a specified sender as read.
+    Example usage: /mark_as_read?sender=user@example.com
+    """
+    # Get the sender email from the query parameters.
+    sender = request.args.get("sender")
+    if not sender:
+        return jsonify({"error": "Please provide a sender email using '?sender=...'"}), 400
+
+    # Get credentials (checks header then session).
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+    
+    # Build the Gmail service.
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+    
+    # Build the query to find unread emails from the sender.
+    query = f"from:{sender} is:unread"
+    results = service.users().messages().list(userId="me", q=query).execute()
+    messages = results.get("messages", [])
+    
+    if not messages:
+        return jsonify({"message": f"No unread emails found from {sender}."})
+
+    marked_count = 0
+    # Loop through the messages and mark each one as read.
+    for message in messages:
+        msg_id = message["id"]
+        modify_body = {
+            "removeLabelIds": ["UNREAD"]
+        }
+        service.users().messages().modify(userId="me", id=msg_id, body=modify_body).execute()
+        marked_count += 1
+
+    # Optionally update session credentials.
+    if "credentials" in session:
+        session["credentials"] = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes
+        }
+
+    return jsonify({"message": f"Marked {marked_count} emails from {sender} as read."})
+
+
 @app.route("/authorize")
 def authorize():
     flow = Flow.from_client_secrets_file(
@@ -166,6 +264,7 @@ def oauth2callback():
     }
     # Redirect to the frontend with the token.
     frontend_url = "http://localhost:8501"
+    
     return redirect(f"{frontend_url}?access_token={credentials.token}")
 
 @app.route("/clear")
