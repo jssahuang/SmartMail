@@ -4,6 +4,9 @@ from google_auth_oauthlib.flow import Flow
 import google.oauth2.credentials
 import googleapiclient.discovery
 from email.utils import parseaddr  # For /top_senders
+from google import genai
+import json
+import re  # Import the re module
 
 app = Flask(__name__)
 app.secret_key = "your-secret-key"  # Use a stable, fixed secret key
@@ -228,6 +231,116 @@ def mark_as_read():
 
     return jsonify({"message": f"Marked {marked_count} emails from {sender} as read."})
 
+@app.route("/prioritize_emails", methods=["GET"])
+def prioritize_emails():
+    """
+    Prioritizes emails from a specified sender that are unread and received after a given date.
+    It calls the Gemini API for each email's subject to get a priority rating (1-10) and returns
+    the top 10 emails with their subject, email ID, and priority.
+    
+    Example usage: /prioritize_emails?sender=user@example.com&date=2024-01-01
+    """
+    # Get parameters from query string.
+    sender_param = request.args.get("sender")
+    date_str = request.args.get("date")
+    if not sender_param or not date_str:
+        return jsonify({"error": "Please provide both 'sender' and 'date' (YYYY-MM-DD) parameters."}), 400
+
+    try:
+        year, month, day = date_str.split("-")
+    except ValueError:
+        return jsonify({"error": "Date format should be YYYY-MM-DD"}), 400
+
+    # Construct Gmail query. (You might also exclude trash if needed, e.g., add "-in:trash")
+    gmail_date = f"{year}/{month}/{day}"
+    query = f"from:{sender_param} is:unread after:{gmail_date}"
+    
+    creds = get_credentials()
+    if creds is None:
+        return redirect(url_for("authorize"))
+    
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds)
+    emails = []
+    page_token = None
+
+    # Retrieve all messages matching the query.
+    while True:
+        response = service.users().messages().list(
+            userId="me", q=query, maxResults=100, pageToken=page_token
+        ).execute()
+        messages = response.get("messages", [])
+        emails.extend(messages)
+        if len(emails) >= 20:
+            emails = emails[:20]  # Cap to 20 messages.
+            break
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    if not emails:
+        return jsonify({"message": f"No unread emails found from {sender_param} after {date_str}."})
+    
+    prioritized_emails = []
+    emailList = []
+    # Process each email: get its subject and compute priority.
+    for message in emails:
+        msg_id = message["id"]
+        msg = service.users().messages().get(
+            userId="me", id=msg_id, format="metadata", metadataHeaders=["Subject"]
+        ).execute()
+        headers = msg.get("payload", {}).get("headers", [])
+        subject = ""
+        for header in headers:
+            if header["name"].lower() == "subject":
+                subject = header["value"]
+                break
+        emailList.append({"email_id": msg_id, "subject": subject})
+   
+    # Call the Gemini API to get the priority for each email.
+    client = genai.Client(api_key="AIzaSyDTLZ7UPwUchzUTZSK2jPUpOAba14hS1dg")
+    response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents="Given a list of " + str(len(emailList)) + " emails, prioritize them based on their subject line, where 10 is a really important email that should be responded to immediately and 1 is most likely to be spam cluttering your inbox. Return the top 10 emails with their subject, email ID, and priority in JSON format with keys email_id unmodified, subject, and priority: " + str(emailList) + "Do not include anything else in the response besides the JSON object.",
+        )
+    
+    response_content = response.text  # Adjust this line based on the actual response structure
+    print("Response content:", response_content)  # Debugging line
+
+    # Check if the response content is empty
+    if not response_content:
+        print("Received empty response from the Gemini API.")
+        return jsonify({"error": "Received empty response from the Gemini API"}), 500
+
+    try:
+        # Use a regular expression to extract the JSON substring
+        json_match = re.search(r'(\[.*\])', response_content, re.DOTALL)
+
+        # json_match = re.search(r'\[.*?\]', response_content)
+        if json_match:
+            json_str = json_match.group(0)
+            prioritized_emails = json.loads(json_str)  # Parse the JSON response
+        else:
+            print("Failed to extract JSON from response because the regular expression did not match.")
+            return jsonify({"error": "Failed to extract JSON from response"}), 500
+    except json.JSONDecodeError as e:
+        print("Failed to parse JSON response:", e)
+        return jsonify({"error": "Failed to parse JSON response", "details": str(e)}), 500
+
+    # Sort emails by priority descending (highest priority first)
+    prioritized_emails.sort(key=lambda x: x["priority"], reverse=True)
+    
+    # Optionally update session credentials.
+    if "credentials" in session:
+        session["credentials"] = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes
+        }
+    
+    return jsonify(prioritized_emails)
 
 @app.route("/authorize")
 def authorize():
